@@ -1,3 +1,7 @@
+// Author: Jason DiMedio
+// Date: August 4, 2019
+// CS373
+// Homework 2
 // CS373-HW2.cpp : This file contains the 'main' function. Program execution begins and ends there.
 // NOTE:	The following code for the PrintProcessNameAndID and relevant sections of the main functions was adapted from: https://docs.microsoft.com/en-us/windows/win32/psapi/enumerating-all-processes
 //			The following code for the ListProcessThreads and printError functions was adapted from: https://docs.microsoft.com/en-us/windows/win32/toolhelp/traversing-the-thread-list
@@ -14,6 +18,8 @@
 #include <processthreadsapi.h>
 #include <string>
 #include <iomanip>
+#include <sstream>
+#include <cstdlib>
 
 // NOTE: The following code was adapted from: https://docs.microsoft.com/en-us/windows/win32/psapi/enumerating-all-processes
 // To ensure correct resolution of symbols, add Psapi.lib to TARGETLIBS
@@ -48,8 +54,8 @@ void PrintProcessNameAndID(DWORD processID)
 	_tprintf(TEXT("%s  (PID: %u)\n"), szProcessName, processID);
 
 	// Release the handle to the process.
-
-	CloseHandle(hProcess);
+	if (hProcess != NULL)
+		CloseHandle(hProcess);
 }
 
 //NOTE: The following code was adapted from: https://docs.microsoft.com/en-us/windows/win32/toolhelp/traversing-the-thread-list
@@ -218,8 +224,6 @@ bool isExecutable(DWORD protect)
 int PrintExecPages(DWORD processID)
 {
 	HANDLE hProcess;
-	DWORD cbNeeded;
-	unsigned int i;
 
 	// Get a handle to the process.
 
@@ -240,15 +244,16 @@ int PrintExecPages(DWORD processID)
 	MEMORY_BASIC_INFORMATION mbi;
 
 	LPVOID current = si.lpMinimumApplicationAddress;
-	LPVOID prev, end_range;
+	LPVOID prev, prev_end_range;
+	LPVOID end_range = NULL;
 	LPVOID max = si.lpMaximumApplicationAddress;
-	//std::cout << "current: " << current << std::endl;
-	//std::cout << "max: " << max << std::endl;
 
-	while ((unsigned int)current < (unsigned int)max)
+	DWORD current_state, previous_protect;
+	DWORD current_protect = NULL;
+	bool mid = false;
+
+	while ((unsigned long long)current < (unsigned long long)max)
 	{
-		//std::cout << "eval: " << ((unsigned int)current < (unsigned int)max) << std::endl;
-
 		VirtualQueryEx(hProcess, current, &mbi, sizeof(mbi));
 
 		/*
@@ -260,12 +265,46 @@ int PrintExecPages(DWORD processID)
 		*/
 
 		prev = current;
-		current = static_cast<char*>(current) + (unsigned int)mbi.RegionSize;
+		prev_end_range = end_range;
+		current = static_cast<char*>(current) + (unsigned long long)mbi.RegionSize;
 		end_range = static_cast<char*>(current) - 1;
 
-		if (isExecutable(mbi.AllocationProtect) && (mbi.State == MEM_COMMIT))
-			std::cout << "\t" << prev << " - " << end_range << "\t" << getProtection(mbi.AllocationProtect) << std::endl;
+		current_state = mbi.State;
+		previous_protect = current_protect;
+		current_protect = mbi.AllocationProtect;
 
+		/*
+		std::cout << "prev: " << prev << std::endl;
+		std::cout << "current: " << current << std::endl;
+		std::cout << "end_range: " << end_range << std::endl;
+		std::cout << "max: " << max << std::endl;
+		std::cout << "eval: " << ((unsigned long long)current < (unsigned long long)max) << std::endl;
+		*/
+
+		if (isExecutable(current_protect) && (current_state == MEM_COMMIT))
+		{
+			if (!mid)
+			{
+				std::cout << "\t" << prev << " - ";
+				mid = true;
+			}
+			else
+			{
+				if (previous_protect != current_protect)
+				{
+					std::cout << end_range << "\t" << getProtection(current_protect) << std::endl;
+					mid = false;
+				}
+			}
+		}
+		else
+		{
+			if (mid)
+			{
+				std::cout << prev_end_range << "\t" << getProtection(previous_protect) << std::endl;
+				mid = false;
+			}
+		}
 	}
 
 	// Release the handle to the process.
@@ -275,9 +314,62 @@ int PrintExecPages(DWORD processID)
 	return 0;
 }
 
-
-int main(void)
+void print_usage(std::string n)
 {
+	std::cout << "USAGE: " << n << " [p|a|r|t|m|e] [Process ID] [Address] [Bytes]" << std::endl;
+	std::cout << std::endl;
+	std::cout << "p = show one process (must include [Process ID])" << std::endl;
+	std::cout << "a = enumerate all processes" << std::endl;
+	std::cout << std::endl;
+	std::cout << "\tUse with p or a:" << std::endl;
+	std::cout << "\tt = show threads" << std::endl;
+	std::cout << "\tm = show modules" << std::endl;
+	std::cout << "\te = show executable memory pages" << std::endl;
+	std::cout << std::endl;
+	std::cout << "r = read [Bytes] of virtual memory for [Process ID] starting at [Address]" << std::endl;
+	std::cout << std::endl;
+	std::cout << "Default (no input): Enumerate all processes" << std::endl;
+
+	exit(0);
+}
+
+int main(int argc, char **argv)
+{
+	std::string name = argv[0];
+
+	bool p = false;
+	bool a = false;
+	bool r = false;
+	bool t = false;
+	bool m = false;
+	bool e = false;
+
+	if (argc >= 2)
+	{
+		for (int i = 0; i < strlen(argv[1]); i++)
+		{
+			if (argv[1][i] == 'p')
+				p = true;
+			else if (argv[1][i] == 'a')
+				a = true;
+			else if (argv[1][i] == 'r')
+				r = true;
+			else if (argv[1][i] == 't')
+				t = true;
+			else if (argv[1][i] == 'm')
+				m = true;
+			else if (argv[1][i] == 'e')
+				e = true;
+		}
+
+		if (!p && !a && !r)
+			a = true;
+	}
+	else
+		a = true;
+
+	if (a)
+	{
 		// Get the list of process identifiers.
 		DWORD aProcesses[1024], cbNeeded, cProcesses;
 		unsigned int i;
@@ -298,22 +390,163 @@ int main(void)
 		{
 			if (aProcesses[i] != 0)
 			{
-				std::cout << "-------------------------------------------------------------------" << std::endl;
+				if (t || m || e)
+					std::cout << "-------------------------------------------------------------------" << std::endl;
 				std::cout << "PROCESS: ";
 				PrintProcessNameAndID(aProcesses[i]);
 
-				std::cout << "THREADS: " << std::endl;
-				ListProcessThreads(aProcesses[i]);
+				if (t)
+				{
+					std::cout << "THREADS: " << std::endl;
+					ListProcessThreads(aProcesses[i]);
+				}
 
-				std::cout << "MODULES: " << std::endl;
-				PrintModules(aProcesses[i]);
+				if (m)
+				{
+					std::cout << "MODULES: " << std::endl;
+					PrintModules(aProcesses[i]);
+				}
 
-				std::cout << "EXECUTABLE PAGES: " << std::endl;
-				PrintExecPages(aProcesses[i]);
+				if (e)
+				{
+					std::cout << "EXECUTABLE PAGES: " << std::endl;
+					PrintExecPages(aProcesses[i]);
+				}
+
 			}
 
 		}
+	}
+
+	else if (p)
+	{
+		if (argc >= 3)
+		{
+			DWORD process_input = atoi(argv[2]);
+
+			HANDLE hProcess;
+
+			hProcess = OpenProcess(PROCESS_QUERY_INFORMATION |
+				PROCESS_VM_READ,
+				FALSE, process_input);
+
+			if (NULL != hProcess)
+			{
+				std::cout << "PROCESS: ";
+				PrintProcessNameAndID(process_input);
+
+				if (t)
+				{
+					std::cout << "THREADS: " << std::endl;
+					ListProcessThreads(process_input);
+				}
+
+				if (m)
+				{
+					std::cout << "MODULES: " << std::endl;
+					PrintModules(process_input);
+				}
+
+				if (e)
+				{
+					std::cout << "EXECUTABLE PAGES: " << std::endl;
+					PrintExecPages(process_input);
+				}
+			}
+			else
+				std::cout << "No process with that PID!" << std::endl;
 
 
+		}
+		else
+			print_usage(name);
+
+	}
+		
+	if (r)
+	{
+		if (argc >= 5)
+		{
+			DWORD process_input = atoi(argv[2]);
+			LPCVOID address;
+			std::size_t bytes = atoi(argv[4]);
+			std::size_t bytes_read;
+			unsigned char* buffer = new unsigned char[bytes];
+
+			std::string adr_str = argv[3];
+			address = (LPCVOID)std::stoull(adr_str, nullptr, 16);
+
+			//std::cout << "process_input: " << process_input << std::endl;
+			//std::cout << "address: " << address << std::endl;
+			//std::cout << "bytes: " << bytes << std::endl;
+			//std::cout << "buffer: " << buffer << std::endl;
+
+
+			HANDLE hProcess;
+
+			// NOTE: The following code was adapted from: https://nullprogram.com/blog/2016/09/03/
+			DWORD access = PROCESS_VM_READ | PROCESS_QUERY_INFORMATION;
+
+			// Get a handle to the process.
+			hProcess = OpenProcess(access, FALSE, process_input);
+			if (NULL != hProcess)
+			{
+				PrintProcessNameAndID(process_input);
+
+				bool read_mem = ReadProcessMemory(hProcess, address, buffer, bytes, &bytes_read);
+				//std::cout << "after read function" << std::endl;
+
+				if (read_mem && (bytes_read <= bytes))
+				{
+					// NOTE: The following code was adapted from: https://stackoverflow.com/questions/10599068/how-do-i-print-bytes-as-hexadecimal
+
+					//const int size = sizeof(buffer) / sizeof(char);
+
+					std::cout << "MEMORY READ: (" << bytes_read << " bytes)" << std::endl;
+
+					int first = 0;
+					int last = 0;
+
+					for (int i = 0; i < bytes_read; i++)
+					{
+						std::cout << std::hex << std::setfill('0') << std::setw(2) <<  (unsigned int)(const_cast<unsigned char*>(buffer))[i];
+
+						if (((i + 1) % 16) == 0)
+						{
+							last = i;
+							std::cout << "\t\t";
+
+							for (int j = first; j < last; j++)
+							{
+								if ((const_cast<unsigned char*>(buffer))[j] == '\n')
+									std::cout << "\\n";
+								else if ((const_cast<unsigned char*>(buffer))[j] == '\r')
+									std::cout << "\\r";
+								else
+									std::cout << (const_cast<unsigned char*>(buffer))[j];
+							}
+								
+
+							std::cout << std::endl;
+							first = i+1;
+						}
+						else
+							std::cout << "  ";
+					}
+
+				}
+				else
+					std::cout << "Nothing read!" << std::endl;
+			}
+			else
+				std::cout << "No process with that PID!" << std::endl;
+			
+			delete[] buffer;
+		}
+		else
+			print_usage(name);
+
+	}
+	   
 	return 0;
 }
